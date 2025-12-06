@@ -188,8 +188,8 @@ aws elbv2 describe-load-balancers --query 'LoadBalancers[0].DNSName'
 
 **Your Name**
 - Course: Cloud Computing
-- Institution: Your University
-- Date: December 2024
+- Institution: UMBC
+- Date: December 2025
 
 ## 📄 License
 
