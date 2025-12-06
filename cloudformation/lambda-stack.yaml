@@ -1,0 +1,213 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Job Portal - Lambda Function Stack for S3 Upload Logging'
+
+# =============================================================================
+# Parameters
+# =============================================================================
+Parameters:
+  ProjectName:
+    Type: String
+    Default: job-portal
+    Description: Name of the project
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+
+  S3BucketName:
+    Type: String
+    Description: Name of the S3 bucket to monitor for uploads
+
+# =============================================================================
+# Resources
+# =============================================================================
+Resources:
+  # ---------------------------------------------------------------------------
+  # IAM Role for Lambda
+  # ---------------------------------------------------------------------------
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3ReadPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectAttributes
+                Resource: !Sub 'arn:aws:s3:::${S3BucketName}/*'
+        - PolicyName: CloudWatchLogsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+
+  # ---------------------------------------------------------------------------
+  # Lambda Function
+  # ---------------------------------------------------------------------------
+  S3UploadLoggerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-s3-upload-logger'
+      Description: Logs S3 file uploads to CloudWatch
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 128
+      Environment:
+        Variables:
+          PROJECT_NAME: !Ref ProjectName
+          ENVIRONMENT: !Ref Environment
+      Code:
+        ZipFile: |
+          import json
+          import logging
+          import os
+          from datetime import datetime
+          
+          # Configure logging
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+          
+          def lambda_handler(event, context):
+              """
+              Lambda function to log S3 upload events to CloudWatch.
+              Triggered by S3 ObjectCreated events.
+              """
+              project_name = os.environ.get('PROJECT_NAME', 'job-portal')
+              environment = os.environ.get('ENVIRONMENT', 'dev')
+              
+              logger.info(f"[{project_name}] S3 Upload Event Received")
+              logger.info(f"Event: {json.dumps(event, indent=2)}")
+              
+              # Process each record in the event
+              for record in event.get('Records', []):
+                  # Extract S3 event details
+                  s3_info = record.get('s3', {})
+                  bucket_name = s3_info.get('bucket', {}).get('name', 'Unknown')
+                  object_key = s3_info.get('object', {}).get('key', 'Unknown')
+                  object_size = s3_info.get('object', {}).get('size', 0)
+                  event_time = record.get('eventTime', datetime.now().isoformat())
+                  event_name = record.get('eventName', 'Unknown')
+                  
+                  # Log structured information
+                  log_entry = {
+                      'timestamp': event_time,
+                      'project': project_name,
+                      'environment': environment,
+                      'event_type': event_name,
+                      'bucket': bucket_name,
+                      'object_key': object_key,
+                      'object_size_bytes': object_size,
+                      'object_size_readable': format_size(object_size),
+                      'source_ip': record.get('requestParameters', {}).get('sourceIPAddress', 'Unknown'),
+                      'user_agent': record.get('userIdentity', {}).get('principalId', 'Unknown')
+                  }
+                  
+                  logger.info(f"S3 Upload Details: {json.dumps(log_entry, indent=2)}")
+                  
+                  # Categorize file type
+                  file_extension = object_key.split('.')[-1].lower() if '.' in object_key else 'unknown'
+                  file_category = categorize_file(file_extension)
+                  logger.info(f"File Category: {file_category} | Extension: {file_extension}")
+              
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps({
+                      'message': 'S3 upload event logged successfully',
+                      'records_processed': len(event.get('Records', []))
+                  })
+              }
+          
+          def format_size(size_bytes):
+              """Convert bytes to human readable format."""
+              if size_bytes == 0:
+                  return "0 B"
+              size_names = ("B", "KB", "MB", "GB", "TB")
+              i = 0
+              while size_bytes >= 1024 and i < len(size_names) - 1:
+                  size_bytes /= 1024
+                  i += 1
+              return f"{size_bytes:.2f} {size_names[i]}"
+          
+          def categorize_file(extension):
+              """Categorize file based on extension."""
+              categories = {
+                  'resume': ['pdf', 'doc', 'docx', 'txt', 'rtf'],
+                  'image': ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'],
+                  'data': ['csv', 'xlsx', 'xls', 'json', 'xml'],
+                  'archive': ['zip', 'tar', 'gz', 'rar']
+              }
+              for category, extensions in categories.items():
+                  if extension in extensions:
+                      return category
+              return 'other'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-s3-upload-logger'
+
+  # ---------------------------------------------------------------------------
+  # Lambda Permission for S3
+  # ---------------------------------------------------------------------------
+  LambdaS3Permission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref S3UploadLoggerFunction
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub 'arn:aws:s3:::${S3BucketName}'
+      SourceAccount: !Ref AWS::AccountId
+
+  # ---------------------------------------------------------------------------
+  # CloudWatch Log Group
+  # ---------------------------------------------------------------------------
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ProjectName}-${Environment}-s3-upload-logger'
+      RetentionInDays: 14
+
+# =============================================================================
+# Outputs
+# =============================================================================
+Outputs:
+  LambdaFunctionArn:
+    Description: ARN of the Lambda function
+    Value: !GetAtt S3UploadLoggerFunction.Arn
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-lambda-arn'
+
+  LambdaFunctionName:
+    Description: Name of the Lambda function
+    Value: !Ref S3UploadLoggerFunction
+
+  LambdaRoleArn:
+    Description: ARN of the Lambda execution role
+    Value: !GetAtt LambdaExecutionRole.Arn
+
+  LogGroupName:
+    Description: CloudWatch Log Group name
+    Value: !Ref LambdaLogGroup

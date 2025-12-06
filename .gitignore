@@ -1,0 +1,166 @@
+# =============================================================================
+# AWS Job Portal Infrastructure - Git Ignore Rules
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Terraform
+# -----------------------------------------------------------------------------
+# Local .terraform directories
+**/.terraform/*
+
+# .tfstate files
+*.tfstate
+*.tfstate.*
+
+# Crash log files
+crash.log
+crash.*.log
+
+# Exclude all .tfvars files, which are likely to contain sensitive data
+*.tfvars
+*.tfvars.json
+
+# Ignore override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Ignore CLI configuration files
+.terraformrc
+terraform.rc
+
+# Terraform lock file (optional - some teams commit this)
+# .terraform.lock.hcl
+
+# -----------------------------------------------------------------------------
+# AWS
+# -----------------------------------------------------------------------------
+# AWS credentials - NEVER commit these
+.aws/
+credentials
+*.pem
+*.key
+
+# AWS SAM
+.aws-sam/
+
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.env
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Pip
+pip-log.txt
+
+# Unit test / coverage reports
+htmlcov/
+.coverage
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# -----------------------------------------------------------------------------
+# Node.js (if using any JS tooling)
+# -----------------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+
+# -----------------------------------------------------------------------------
+# IDE / Editor
+# -----------------------------------------------------------------------------
+# VSCode
+.vscode/
+*.code-workspace
+
+# IntelliJ / PyCharm
+.idea/
+*.iml
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+
+# -----------------------------------------------------------------------------
+# OS Generated Files
+# -----------------------------------------------------------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# -----------------------------------------------------------------------------
+# Project Specific
+# -----------------------------------------------------------------------------
+# Lambda deployment packages
+lambda/*.zip
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Sensitive configuration
+config/secrets.yaml
+config/secrets.json
+.env.local
+.env.production
+
+# Build artifacts
+*.zip
+!lambda/function.zip
+
+# Test files (if you don't want to track them)
+# test-*.pdf
+# test-*.jpg
+
+# Large binary files
+*.pdf
+*.doc
+*.docx
+
+# -----------------------------------------------------------------------------
+# Documentation (optional - depending on your workflow)
+# -----------------------------------------------------------------------------
+# Keep screenshots but ignore auto-generated docs
+# docs/auto-generated/
+
+# =============================================================================
+# End of .gitignore
+# =============================================================================

@@ -1,0 +1,32 @@
+# =============================================================================
+# Terraform Variables - Example Configuration
+# =============================================================================
+# Copy this file to terraform.tfvars and update with your values
+# DO NOT commit terraform.tfvars to version control
+# =============================================================================
+
+# General Configuration
+project_name = "job-portal"
+environment  = "dev"
+aws_region   = "us-east-1"
+
+# VPC Configuration
+vpc_cidr             = "10.0.0.0/16"
+public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
+private_subnet_cidrs = ["10.0.10.0/24", "10.0.20.0/24"]
+availability_zones   = ["us-east-1a", "us-east-1b"]
+
+# EC2 Configuration
+instance_type = "t2.micro"
+key_pair_name = "your-key-pair-name"  # Create this in AWS Console first
+
+# RDS Configuration
+db_instance_class = "db.t3.micro"
+db_name           = "jobportaldb"
+db_username       = "admin"
+db_password       = "YourSecurePassword123!"  # Change this!
+
+# Auto Scaling Configuration
+min_capacity     = 1
+max_capacity     = 3
+desired_capacity = 2
