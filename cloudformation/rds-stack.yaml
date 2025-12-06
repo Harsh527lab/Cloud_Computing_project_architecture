@@ -98,13 +98,13 @@ Resources:
       MasterUserPassword: !Ref DBPassword
       AllocatedStorage: !Ref DBAllocatedStorage
       StorageType: gp2
-      StorageEncrypted: true
+      StorageEncrypted: false
       VPCSecurityGroups:
         - !Ref RDSSecurityGroupId
       DBSubnetGroupName: !Ref DBSubnetGroup
       MultiAZ: false
       PubliclyAccessible: false
-      BackupRetentionPeriod: 7
+      BackupRetentionPeriod: 0
       PreferredBackupWindow: '03:00-04:00'
       PreferredMaintenanceWindow: 'sun:04:00-sun:05:00'
       AutoMinorVersionUpgrade: true
