@@ -1,50 +1,36 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Job Portal - EC2 Stack with Full Web Application'
+Description: 'Job Portal - EC2 with Web Application'
 
 Parameters:
   ProjectName:
     Type: String
     Default: job-portal
-
   Environment:
     Type: String
     Default: dev
-
   VpcId:
     Type: AWS::EC2::VPC::Id
-
   PublicSubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
-
   PrivateSubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
-
   ALBSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
-
   EC2SecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
-
   InstanceType:
     Type: String
     Default: t2.micro
-
   S3BucketName:
     Type: String
-    Description: S3 bucket name for resume storage
-
   DBEndpoint:
     Type: String
-    Description: RDS database endpoint
-
   DBName:
     Type: String
     Default: jobportaldb
-
   DBUsername:
     Type: String
     Default: admin
-
   DBPassword:
     Type: String
     NoEcho: true
@@ -53,7 +39,7 @@ Resources:
   EC2Role:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${ProjectName}-${Environment}-ec2-role-v2'
+      RoleName: !Sub '${ProjectName}-${Environment}-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -64,574 +50,170 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
       Policies:
-        - PolicyName: S3FullAccessPolicy
+        - PolicyName: S3Access
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
-                Action:
-                  - s3:PutObject
-                  - s3:GetObject
-                  - s3:DeleteObject
-                  - s3:ListBucket
-                Resource:
-                  - !Sub 'arn:aws:s3:::${S3BucketName}'
-                  - !Sub 'arn:aws:s3:::${S3BucketName}/*'
+                Action: ['s3:PutObject','s3:GetObject','s3:DeleteObject','s3:ListBucket']
+                Resource: [!Sub 'arn:aws:s3:::${S3BucketName}',!Sub 'arn:aws:s3:::${S3BucketName}/*']
 
   EC2InstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
-      InstanceProfileName: !Sub '${ProjectName}-${Environment}-ec2-profile-v2'
-      Roles:
-        - !Ref EC2Role
+      Roles: [!Ref EC2Role]
 
-  ApplicationLoadBalancer:
+  ALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
-      Name: !Sub '${ProjectName}-${Environment}-alb-v2'
-      Type: application
+      Name: !Sub '${ProjectName}-${Environment}-alb'
       Scheme: internet-facing
-      SecurityGroups:
-        - !Ref ALBSecurityGroupId
+      SecurityGroups: [!Ref ALBSecurityGroupId]
       Subnets: !Ref PublicSubnetIds
 
-  ALBTargetGroup:
+  TG:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: !Sub '${ProjectName}-${Environment}-tg-v2'
+      Name: !Sub '${ProjectName}-${Environment}-tg'
       Port: 80
       Protocol: HTTP
       VpcId: !Ref VpcId
-      TargetType: instance
       HealthCheckPath: /health
-      HealthCheckIntervalSeconds: 30
-      HealthyThresholdCount: 2
-      UnhealthyThresholdCount: 5
 
-  ALBListener:
+  Listener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
-      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      LoadBalancerArn: !Ref ALB
       Port: 80
       Protocol: HTTP
       DefaultActions:
         - Type: forward
-          TargetGroupArn: !Ref ALBTargetGroup
+          TargetGroupArn: !Ref TG
 
-  LaunchTemplate:
+  LT:
     Type: AWS::EC2::LaunchTemplate
     Properties:
-      LaunchTemplateName: !Sub '${ProjectName}-${Environment}-lt-v2'
       LaunchTemplateData:
         ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2}}'
         InstanceType: !Ref InstanceType
         IamInstanceProfile:
           Arn: !GetAtt EC2InstanceProfile.Arn
-        SecurityGroupIds:
-          - !Ref EC2SecurityGroupId
+        SecurityGroupIds: [!Ref EC2SecurityGroupId]
         UserData:
           Fn::Base64: !Sub |
             #!/bin/bash
-            set -e
-            exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
-            
-            echo "=== Starting Application Deployment ==="
-            
-            # Update system and install dependencies
-            yum update -y
-            yum install -y python3 python3-pip git
-            
-            # Install Python packages
-            pip3 install flask boto3 pymysql werkzeug
-            
-            # Create application directory
-            mkdir -p /var/www/job-portal/templates
-            cd /var/www/job-portal
-            
-            # Set environment variables
-            cat > /etc/environment << 'ENVEOF'
-            DB_HOST=${DBEndpoint}
-            DB_USER=${DBUsername}
-            DB_PASSWORD=${DBPassword}
-            DB_NAME=${DBName}
-            S3_BUCKET=${S3BucketName}
-            AWS_REGION=${AWS::Region}
-            SECRET_KEY=your-super-secret-key-change-me
-            ENVEOF
-            
-            # Source environment variables
-            export DB_HOST=${DBEndpoint}
-            export DB_USER=${DBUsername}
-            export DB_PASSWORD=${DBPassword}
-            export DB_NAME=${DBName}
-            export S3_BUCKET=${S3BucketName}
-            export AWS_REGION=${AWS::Region}
-            export SECRET_KEY=your-super-secret-key-change-me
-            
-            # Create Flask Application
-            cat > /var/www/job-portal/app.py << 'APPEOF'
-            import os
-            import boto3
-            import pymysql
-            from flask import Flask, render_template, request, redirect, url_for, flash
+            yum update -y && yum install -y python3 python3-pip
+            pip3 install flask boto3 pymysql
+            mkdir -p /var/www/app/templates && cd /var/www/app
+            cat > app.py << 'APPEOF'
+            import os,boto3,pymysql
+            from flask import *
             from werkzeug.utils import secure_filename
             from datetime import datetime
-            import logging
-            
-            logging.basicConfig(level=logging.INFO)
-            logger = logging.getLogger(__name__)
-            
-            app = Flask(__name__)
-            app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key')
-            
-            DB_HOST = os.environ.get('DB_HOST', 'localhost')
-            DB_USER = os.environ.get('DB_USER', 'admin')
-            DB_PASSWORD = os.environ.get('DB_PASSWORD', 'password')
-            DB_NAME = os.environ.get('DB_NAME', 'jobportaldb')
-            S3_BUCKET = os.environ.get('S3_BUCKET', 'job-portal-bucket')
-            AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
-            
-            ALLOWED_EXTENSIONS = {'pdf', 'doc', 'docx', 'txt'}
-            s3_client = boto3.client('s3', region_name=AWS_REGION)
-            
-            def allowed_file(filename):
-                return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-            
-            def get_db_connection():
-                try:
-                    return pymysql.connect(host=DB_HOST, user=DB_USER, password=DB_PASSWORD, 
-                                          database=DB_NAME, cursorclass=pymysql.cursors.DictCursor)
-                except Exception as e:
-                    logger.error(f"DB connection error: {e}")
-                    return None
-            
-            def init_database():
-                conn = get_db_connection()
-                if conn:
-                    try:
-                        with conn.cursor() as cursor:
-                            cursor.execute("""
-                                CREATE TABLE IF NOT EXISTS job_applications (
-                                    id INT AUTO_INCREMENT PRIMARY KEY,
-                                    company_name VARCHAR(255) NOT NULL,
-                                    role_name VARCHAR(255) NOT NULL,
-                                    status ENUM('Applied','Interview','Offer','Rejected','Withdrawn') DEFAULT 'Applied',
-                                    resume_filename VARCHAR(255),
-                                    resume_s3_key VARCHAR(500),
-                                    applied_date DATE,
-                                    notes TEXT,
-                                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-                                )
-                            """)
-                            conn.commit()
-                            logger.info("Database initialized")
-                    except Exception as e:
-                        logger.error(f"DB init error: {e}")
-                    finally:
-                        conn.close()
-            
-            def upload_to_s3(file, filename):
-                try:
-                    s3_key = f"resumes/{datetime.now().strftime('%Y%m%d_%H%M%S')}_{filename}"
-                    s3_client.upload_fileobj(file, S3_BUCKET, s3_key,
-                        ExtraArgs={'ContentType': file.content_type})
-                    return s3_key
-                except Exception as e:
-                    logger.error(f"S3 upload error: {e}")
-                    return None
-            
-            def get_s3_url(s3_key):
-                try:
-                    return s3_client.generate_presigned_url('get_object',
-                        Params={'Bucket': S3_BUCKET, 'Key': s3_key}, ExpiresIn=3600)
-                except:
-                    return None
-            
+            app=Flask(__name__)
+            app.secret_key='s3cr3t'
+            e=os.environ.get
+            H,U,P,D,B,R=e('DB_HOST'),e('DB_USER'),e('DB_PASSWORD'),e('DB_NAME'),e('S3_BUCKET'),e('AWS_REGION','us-east-1')
+            s3=boto3.client('s3',region_name=R)
+            def db():
+             try:return pymysql.connect(host=H,user=U,password=P,database=D,cursorclass=pymysql.cursors.DictCursor)
+             except:return None
+            def init():
+             c=db()
+             if c:
+              with c.cursor() as x:x.execute("CREATE TABLE IF NOT EXISTS jobs(id INT AUTO_INCREMENT PRIMARY KEY,company VARCHAR(255),role VARCHAR(255),status VARCHAR(50) DEFAULT 'Applied',resume_key VARCHAR(500),applied_date DATE,notes TEXT,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");c.commit()
+              c.close()
             @app.route('/')
             def index():
-                conn = get_db_connection()
-                applications = []
-                if conn:
-                    try:
-                        with conn.cursor() as cursor:
-                            cursor.execute("SELECT * FROM job_applications ORDER BY created_at DESC")
-                            applications = cursor.fetchall()
-                    except Exception as e:
-                        flash('Error loading applications', 'error')
-                    finally:
-                        conn.close()
-                return render_template('index.html', applications=applications)
-            
-            @app.route('/add', methods=['GET', 'POST'])
-            def add_application():
-                if request.method == 'POST':
-                    company = request.form.get('company_name', '').strip()
-                    role = request.form.get('role_name', '').strip()
-                    status = request.form.get('status', 'Applied')
-                    applied_date = request.form.get('applied_date', '')
-                    notes = request.form.get('notes', '').strip()
-                    
-                    if not company or not role:
-                        flash('Company and role are required!', 'error')
-                        return redirect(url_for('add_application'))
-                    
-                    resume_filename = None
-                    resume_s3_key = None
-                    if 'resume' in request.files:
-                        file = request.files['resume']
-                        if file and file.filename and allowed_file(file.filename):
-                            resume_filename = secure_filename(file.filename)
-                            resume_s3_key = upload_to_s3(file, resume_filename)
-                    
-                    conn = get_db_connection()
-                    if conn:
-                        try:
-                            with conn.cursor() as cursor:
-                                cursor.execute("""
-                                    INSERT INTO job_applications (company_name, role_name, status, 
-                                    resume_filename, resume_s3_key, applied_date, notes)
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                                """, (company, role, status, resume_filename, resume_s3_key,
-                                      applied_date if applied_date else None, notes))
-                                conn.commit()
-                                flash(f'Application for {role} at {company} added!', 'success')
-                        except Exception as e:
-                            flash('Error saving application', 'error')
-                        finally:
-                            conn.close()
-                    return redirect(url_for('index'))
-                return render_template('add_application.html')
-            
+             c=db();jobs=[]
+             if c:
+              with c.cursor() as x:x.execute("SELECT * FROM jobs ORDER BY created_at DESC");jobs=x.fetchall()
+              c.close()
+             return render_template('index.html',jobs=jobs)
+            @app.route('/add',methods=['GET','POST'])
+            def add():
+             if request.method=='POST':
+              co,ro,st,dt,nt=request.form.get('company',''),request.form.get('role',''),request.form.get('status','Applied'),request.form.get('date',''),request.form.get('notes','')
+              rk=None
+              if 'resume' in request.files:
+               f=request.files['resume']
+               if f and f.filename:
+                fn=secure_filename(f.filename);rk=f"resumes/{datetime.now().strftime('%Y%m%d%H%M%S')}_{fn}"
+                try:s3.upload_fileobj(f,B,rk)
+                except:rk=None
+              c=db()
+              if c:
+               with c.cursor() as x:x.execute("INSERT INTO jobs(company,role,status,resume_key,applied_date,notes)VALUES(%s,%s,%s,%s,%s,%s)",(co,ro,st,rk,dt or None,nt));c.commit()
+               c.close();flash('Added!','success')
+              return redirect('/')
+             return render_template('add.html')
             @app.route('/view/<int:id>')
-            def view_application(id):
-                conn = get_db_connection()
-                application = None
-                resume_url = None
-                if conn:
-                    try:
-                        with conn.cursor() as cursor:
-                            cursor.execute("SELECT * FROM job_applications WHERE id = %s", (id,))
-                            application = cursor.fetchone()
-                            if application and application.get('resume_s3_key'):
-                                resume_url = get_s3_url(application['resume_s3_key'])
-                    except:
-                        pass
-                    finally:
-                        conn.close()
-                if not application:
-                    flash('Application not found', 'error')
-                    return redirect(url_for('index'))
-                return render_template('view_application.html', application=application, resume_url=resume_url)
-            
-            @app.route('/delete/<int:id>', methods=['POST'])
-            def delete_application(id):
-                conn = get_db_connection()
-                if conn:
-                    try:
-                        with conn.cursor() as cursor:
-                            cursor.execute("SELECT resume_s3_key FROM job_applications WHERE id=%s", (id,))
-                            result = cursor.fetchone()
-                            cursor.execute("DELETE FROM job_applications WHERE id = %s", (id,))
-                            conn.commit()
-                            if result and result.get('resume_s3_key'):
-                                try:
-                                    s3_client.delete_object(Bucket=S3_BUCKET, Key=result['resume_s3_key'])
-                                except:
-                                    pass
-                            flash('Application deleted!', 'success')
-                    except:
-                        flash('Error deleting application', 'error')
-                    finally:
-                        conn.close()
-                return redirect(url_for('index'))
-            
+            def view(id):
+             c=db();j=None;url=None
+             if c:
+              with c.cursor() as x:x.execute("SELECT * FROM jobs WHERE id=%s",(id,));j=x.fetchone()
+              c.close()
+             if j and j.get('resume_key'):
+              try:url=s3.generate_presigned_url('get_object',Params={'Bucket':B,'Key':j['resume_key']},ExpiresIn=3600)
+              except:pass
+             return render_template('view.html',job=j,url=url)
+            @app.route('/delete/<int:id>',methods=['POST'])
+            def delete(id):
+             c=db()
+             if c:
+              with c.cursor() as x:x.execute("SELECT resume_key FROM jobs WHERE id=%s",(id,));r=x.fetchone();x.execute("DELETE FROM jobs WHERE id=%s",(id,));c.commit()
+              c.close()
+              if r and r.get('resume_key'):
+               try:s3.delete_object(Bucket=B,Key=r['resume_key'])
+               except:pass
+              flash('Deleted!','success')
+             return redirect('/')
             @app.route('/health')
-            def health():
-                return {'status': 'healthy'}, 200
-            
-            if __name__ == '__main__':
-                init_database()
-                app.run(host='0.0.0.0', port=80)
+            def health():return{'status':'ok'},200
+            if __name__=='__main__':init();app.run(host='0.0.0.0',port=80)
             APPEOF
-            
-            # Create base template
-            cat > /var/www/job-portal/templates/base.html << 'BASEEOF'
-            <!DOCTYPE html>
-            <html lang="en">
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>{% block title %}Job Portal{% endblock %}</title>
-                <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-                <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
-                <style>
-                    body { background: #f3f4f6; }
-                    .navbar { background: linear-gradient(135deg, #4f46e5, #7c3aed); }
-                    .card { border: none; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.07); }
-                    .card-header { background: linear-gradient(135deg, #4f46e5, #7c3aed); color: white; border-radius: 12px 12px 0 0 !important; }
-                    .btn-primary { background: #4f46e5; border-color: #4f46e5; }
-                    .btn-primary:hover { background: #4338ca; }
-                    .status-applied { background: #dbeafe; color: #1d4ed8; padding: 0.3rem 0.8rem; border-radius: 20px; }
-                    .status-interview { background: #fef3c7; color: #d97706; padding: 0.3rem 0.8rem; border-radius: 20px; }
-                    .status-offer { background: #d1fae5; color: #059669; padding: 0.3rem 0.8rem; border-radius: 20px; }
-                    .status-rejected { background: #fee2e2; color: #dc2626; padding: 0.3rem 0.8rem; border-radius: 20px; }
-                    .status-withdrawn { background: #f3f4f6; color: #6b7280; padding: 0.3rem 0.8rem; border-radius: 20px; }
-                    .hero { background: linear-gradient(135deg, #4f46e5, #7c3aed); color: white; padding: 2rem; border-radius: 12px; margin-bottom: 2rem; }
-                </style>
-            </head>
-            <body>
-                <nav class="navbar navbar-expand-lg navbar-dark">
-                    <div class="container">
-                        <a class="navbar-brand" href="/"><i class="bi bi-briefcase-fill me-2"></i>Job Portal</a>
-                        <div class="navbar-nav ms-auto">
-                            <a class="nav-link" href="/"><i class="bi bi-house me-1"></i>Home</a>
-                            <a class="nav-link" href="/add"><i class="bi bi-plus-circle me-1"></i>Add</a>
-                        </div>
-                    </div>
-                </nav>
-                <div class="container mt-3">
-                    {% with messages = get_flashed_messages(with_categories=true) %}
-                        {% if messages %}
-                            {% for cat, msg in messages %}
-                                <div class="alert alert-{{ 'danger' if cat == 'error' else cat }} alert-dismissible fade show">
-                                    {{ msg }}
-                                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                                </div>
-                            {% endfor %}
-                        {% endif %}
-                    {% endwith %}
-                </div>
-                <main class="container py-4">{% block content %}{% endblock %}</main>
-                <footer class="text-center py-4 text-muted"><i class="bi bi-cloud me-1"></i>AWS Cloud Project - EC2, RDS, S3, Lambda</footer>
-                <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-            </body>
-            </html>
-            BASEEOF
-            
-            # Create index template
-            cat > /var/www/job-portal/templates/index.html << 'INDEXEOF'
-            {% extends "base.html" %}
-            {% block content %}
-            <div class="hero">
-                <div class="row align-items-center">
-                    <div class="col-md-8">
-                        <h1><i class="bi bi-briefcase-fill me-2"></i>Job Application Tracker</h1>
-                        <p class="mb-0 opacity-75">Track your job applications, upload resumes, and stay organized.</p>
-                    </div>
-                    <div class="col-md-4 text-md-end mt-3 mt-md-0">
-                        <a href="/add" class="btn btn-light btn-lg"><i class="bi bi-plus-circle me-2"></i>Add Application</a>
-                    </div>
-                </div>
-            </div>
-            <div class="card">
-                <div class="card-header"><i class="bi bi-list-ul me-2"></i>My Applications</div>
-                <div class="card-body p-0">
-                    {% if applications %}
-                    <div class="table-responsive">
-                        <table class="table table-hover mb-0">
-                            <thead><tr><th>Company</th><th>Role</th><th>Status</th><th>Date</th><th>Resume</th><th>Actions</th></tr></thead>
-                            <tbody>
-                            {% for app in applications %}
-                            <tr>
-                                <td><strong>{{ app.company_name }}</strong></td>
-                                <td>{{ app.role_name }}</td>
-                                <td><span class="status-{{ app.status|lower }}">{{ app.status }}</span></td>
-                                <td>{{ app.applied_date.strftime('%b %d, %Y') if app.applied_date else 'N/A' }}</td>
-                                <td>{% if app.resume_filename %}<i class="bi bi-file-check text-success"></i>{% else %}<i class="bi bi-file-x text-muted"></i>{% endif %}</td>
-                                <td>
-                                    <a href="/view/{{ app.id }}" class="btn btn-sm btn-outline-primary"><i class="bi bi-eye"></i></a>
-                                    <form action="/delete/{{ app.id }}" method="POST" class="d-inline" onsubmit="return confirm('Delete this application?');">
-                                        <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
-                                    </form>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                    {% else %}
-                    <div class="text-center py-5 text-muted">
-                        <i class="bi bi-inbox" style="font-size: 3rem;"></i>
-                        <h5 class="mt-3">No Applications Yet</h5>
-                        <a href="/add" class="btn btn-primary mt-2"><i class="bi bi-plus-circle me-1"></i>Add Your First</a>
-                    </div>
-                    {% endif %}
-                </div>
-            </div>
-            {% endblock %}
-            INDEXEOF
-            
-            # Create add application template
-            cat > /var/www/job-portal/templates/add_application.html << 'ADDEOF'
-            {% extends "base.html" %}
-            {% block title %}Add Application{% endblock %}
-            {% block content %}
-            <div class="row justify-content-center">
-                <div class="col-md-8">
-                    <div class="card">
-                        <div class="card-header"><i class="bi bi-plus-circle me-2"></i>Add New Application</div>
-                        <div class="card-body p-4">
-                            <form method="POST" enctype="multipart/form-data">
-                                <div class="mb-3">
-                                    <label class="form-label"><i class="bi bi-building me-1"></i>Company Name *</label>
-                                    <input type="text" class="form-control" name="company_name" placeholder="e.g., Google" required>
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label"><i class="bi bi-person-badge me-1"></i>Role *</label>
-                                    <input type="text" class="form-control" name="role_name" placeholder="e.g., Software Engineer" required>
-                                </div>
-                                <div class="row">
-                                    <div class="col-md-6 mb-3">
-                                        <label class="form-label"><i class="bi bi-flag me-1"></i>Status</label>
-                                        <select class="form-select" name="status">
-                                            <option value="Applied">Applied</option>
-                                            <option value="Interview">Interview</option>
-                                            <option value="Offer">Offer</option>
-                                            <option value="Rejected">Rejected</option>
-                                            <option value="Withdrawn">Withdrawn</option>
-                                        </select>
-                                    </div>
-                                    <div class="col-md-6 mb-3">
-                                        <label class="form-label"><i class="bi bi-calendar me-1"></i>Applied Date</label>
-                                        <input type="date" class="form-control" name="applied_date">
-                                    </div>
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label"><i class="bi bi-file-earmark-arrow-up me-1"></i>Resume (PDF, DOC, DOCX, TXT)</label>
-                                    <input type="file" class="form-control" name="resume" accept=".pdf,.doc,.docx,.txt">
-                                    <div class="form-text"><i class="bi bi-cloud-upload me-1"></i>Stored securely in AWS S3</div>
-                                </div>
-                                <div class="mb-4">
-                                    <label class="form-label"><i class="bi bi-journal-text me-1"></i>Notes</label>
-                                    <textarea class="form-control" name="notes" rows="3" placeholder="Any notes..."></textarea>
-                                </div>
-                                <div class="d-flex justify-content-between">
-                                    <a href="/" class="btn btn-outline-secondary"><i class="bi bi-arrow-left me-1"></i>Cancel</a>
-                                    <button type="submit" class="btn btn-primary"><i class="bi bi-check-circle me-1"></i>Submit</button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            {% endblock %}
-            ADDEOF
-            
-            # Create view application template
-            cat > /var/www/job-portal/templates/view_application.html << 'VIEWEOF'
-            {% extends "base.html" %}
-            {% block title %}{{ application.company_name }}{% endblock %}
-            {% block content %}
-            <div class="row justify-content-center">
-                <div class="col-md-8">
-                    <a href="/" class="btn btn-outline-secondary mb-3"><i class="bi bi-arrow-left me-1"></i>Back</a>
-                    <div class="card">
-                        <div class="card-header d-flex justify-content-between">
-                            <span><i class="bi bi-briefcase me-2"></i>Application Details</span>
-                            <span class="status-{{ application.status|lower }}">{{ application.status }}</span>
-                        </div>
-                        <div class="card-body p-4">
-                            <h2>{{ application.company_name }}</h2>
-                            <h5 class="text-muted">{{ application.role_name }}</h5>
-                            <hr>
-                            <div class="row mb-3">
-                                <div class="col-md-6"><label class="text-muted small">Applied Date</label><p>{{ application.applied_date.strftime('%B %d, %Y') if application.applied_date else 'Not set' }}</p></div>
-                                <div class="col-md-6"><label class="text-muted small">Added On</label><p>{{ application.created_at.strftime('%B %d, %Y') }}</p></div>
-                            </div>
-                            {% if application.resume_filename and resume_url %}
-                            <div class="mb-3">
-                                <label class="text-muted small">Resume</label>
-                                <div class="p-3 bg-light rounded d-flex justify-content-between align-items-center">
-                                    <span><i class="bi bi-file-earmark-pdf text-danger me-2"></i>{{ application.resume_filename }}</span>
-                                    <a href="{{ resume_url }}" target="_blank" class="btn btn-primary btn-sm"><i class="bi bi-download me-1"></i>Download</a>
-                                </div>
-                            </div>
-                            {% endif %}
-                            {% if application.notes %}
-                            <div class="mb-3">
-                                <label class="text-muted small">Notes</label>
-                                <div class="p-3 bg-light rounded">{{ application.notes }}</div>
-                            </div>
-                            {% endif %}
-                            <hr>
-                            <div class="d-flex justify-content-between">
-                                <form action="/delete/{{ application.id }}" method="POST" onsubmit="return confirm('Delete?');">
-                                    <button class="btn btn-outline-danger"><i class="bi bi-trash me-1"></i>Delete</button>
-                                </form>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            {% endblock %}
-            VIEWEOF
-            
-            # Create systemd service
-            cat > /etc/systemd/system/jobportal.service << 'SVCEOF'
+            cat > templates/index.html << 'HTMLEOF'
+            <!DOCTYPE html><html><head><title>Job Portal</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"><link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet"><style>body{background:#f3f4f6}.hero{background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;padding:2rem;border-radius:12px;margin-bottom:2rem}.card{border:none;border-radius:12px;box-shadow:0 4px 6px rgba(0,0,0,.07)}.card-header{background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff}.btn-primary{background:#4f46e5;border-color:#4f46e5}.st{padding:.3rem .8rem;border-radius:20px;font-size:.85rem}.st-applied{background:#dbeafe;color:#1d4ed8}.st-interview{background:#fef3c7;color:#d97706}.st-offer{background:#d1fae5;color:#059669}.st-rejected{background:#fee2e2;color:#dc2626}</style></head><body><nav class="navbar navbar-dark" style="background:linear-gradient(135deg,#4f46e5,#7c3aed)"><div class="container"><a class="navbar-brand" href="/"><i class="bi bi-briefcase-fill me-2"></i>Job Portal</a><div class="navbar-nav flex-row"><a class="nav-link px-2" href="/">Home</a><a class="nav-link px-2" href="/add">Add</a></div></div></nav><div class="container py-4">{% with m=get_flashed_messages(with_categories=true) %}{% if m %}{% for c,msg in m %}<div class="alert alert-success">{{msg}}</div>{% endfor %}{% endif %}{% endwith %}<div class="hero"><div class="d-flex justify-content-between align-items-center flex-wrap"><div><h2><i class="bi bi-briefcase-fill me-2"></i>Job Application Tracker</h2><p class="mb-0">Track applications, upload resumes, stay organized.</p></div><a href="/add" class="btn btn-light"><i class="bi bi-plus-circle me-2"></i>Add Application</a></div></div><div class="card"><div class="card-header"><i class="bi bi-list-ul me-2"></i>My Applications</div><div class="card-body p-0">{% if jobs %}<table class="table table-hover mb-0"><thead><tr><th>Company</th><th>Role</th><th>Status</th><th>Date</th><th>Resume</th><th>Actions</th></tr></thead><tbody>{% for j in jobs %}<tr><td><strong>{{j.company}}</strong></td><td>{{j.role}}</td><td><span class="st st-{{j.status|lower}}">{{j.status}}</span></td><td>{{j.applied_date.strftime('%b %d') if j.applied_date else '-'}}</td><td>{% if j.resume_key %}<i class="bi bi-check text-success"></i>{% else %}-{% endif %}</td><td><a href="/view/{{j.id}}" class="btn btn-sm btn-outline-primary"><i class="bi bi-eye"></i></a> <form action="/delete/{{j.id}}" method="POST" class="d-inline" onsubmit="return confirm('Delete?')"><button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button></form></td></tr>{% endfor %}</tbody></table>{% else %}<div class="text-center py-5"><i class="bi bi-inbox" style="font-size:3rem"></i><h5>No Applications</h5><a href="/add" class="btn btn-primary mt-2">Add Your First</a></div>{% endif %}</div></div></div><script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script></body></html>
+            HTMLEOF
+            cat > templates/add.html << 'HTMLEOF'
+            <!DOCTYPE html><html><head><title>Add - Job Portal</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"><link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet"><style>body{background:#f3f4f6}.card{border:none;border-radius:12px;box-shadow:0 4px 6px rgba(0,0,0,.07)}.card-header{background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff}.btn-primary{background:#4f46e5;border-color:#4f46e5}</style></head><body><nav class="navbar navbar-dark" style="background:linear-gradient(135deg,#4f46e5,#7c3aed)"><div class="container"><a class="navbar-brand" href="/"><i class="bi bi-briefcase-fill me-2"></i>Job Portal</a></div></nav><div class="container py-4"><div class="row justify-content-center"><div class="col-md-8"><div class="card"><div class="card-header"><i class="bi bi-plus-circle me-2"></i>Add Application</div><div class="card-body p-4"><form method="POST" enctype="multipart/form-data"><div class="mb-3"><label class="form-label">Company *</label><input type="text" class="form-control" name="company" required></div><div class="mb-3"><label class="form-label">Role *</label><input type="text" class="form-control" name="role" required></div><div class="row"><div class="col-md-6 mb-3"><label class="form-label">Status</label><select class="form-select" name="status"><option>Applied</option><option>Interview</option><option>Offer</option><option>Rejected</option></select></div><div class="col-md-6 mb-3"><label class="form-label">Date</label><input type="date" class="form-control" name="date"></div></div><div class="mb-3"><label class="form-label">Resume</label><input type="file" class="form-control" name="resume"><small class="text-muted">Stored in AWS S3</small></div><div class="mb-3"><label class="form-label">Notes</label><textarea class="form-control" name="notes" rows="2"></textarea></div><div class="d-flex justify-content-between"><a href="/" class="btn btn-secondary">Cancel</a><button class="btn btn-primary">Submit</button></div></form></div></div></div></div></div></body></html>
+            HTMLEOF
+            cat > templates/view.html << 'HTMLEOF'
+            <!DOCTYPE html><html><head><title>View - Job Portal</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"><link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet"><style>body{background:#f3f4f6}.card{border:none;border-radius:12px;box-shadow:0 4px 6px rgba(0,0,0,.07)}.card-header{background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff}.btn-primary{background:#4f46e5}</style></head><body><nav class="navbar navbar-dark" style="background:linear-gradient(135deg,#4f46e5,#7c3aed)"><div class="container"><a class="navbar-brand" href="/"><i class="bi bi-briefcase-fill me-2"></i>Job Portal</a></div></nav><div class="container py-4"><div class="row justify-content-center"><div class="col-md-8"><a href="/" class="btn btn-secondary mb-3">Back</a><div class="card"><div class="card-header">Application Details</div><div class="card-body p-4"><h3>{{job.company}}</h3><h5 class="text-muted">{{job.role}}</h5><hr><p><strong>Status:</strong> {{job.status}}</p><p><strong>Date:</strong> {{job.applied_date.strftime('%B %d, %Y') if job.applied_date else 'Not set'}}</p>{% if job.resume_key and url %}<p><strong>Resume:</strong> <a href="{{url}}" target="_blank" class="btn btn-sm btn-primary">Download</a></p>{% endif %}{% if job.notes %}<p><strong>Notes:</strong> {{job.notes}}</p>{% endif %}<hr><form action="/delete/{{job.id}}" method="POST" onsubmit="return confirm('Delete?')"><button class="btn btn-danger">Delete</button></form></div></div></div></div></div></body></html>
+            HTMLEOF
+            cat > /etc/systemd/system/app.service << EOF
             [Unit]
-            Description=Job Portal Flask Application
+            Description=JobPortal
             After=network.target
-            
             [Service]
-            User=root
-            WorkingDirectory=/var/www/job-portal
-            EnvironmentFile=/etc/environment
-            ExecStart=/usr/bin/python3 /var/www/job-portal/app.py
+            Environment="DB_HOST=${DBEndpoint}"
+            Environment="DB_USER=${DBUsername}"
+            Environment="DB_PASSWORD=${DBPassword}"
+            Environment="DB_NAME=${DBName}"
+            Environment="S3_BUCKET=${S3BucketName}"
+            Environment="AWS_REGION=${AWS::Region}"
+            WorkingDirectory=/var/www/app
+            ExecStart=/usr/bin/python3 app.py
             Restart=always
-            RestartSec=5
-            
             [Install]
             WantedBy=multi-user.target
-            SVCEOF
-            
-            # Start the service
-            systemctl daemon-reload
-            systemctl enable jobportal
-            systemctl start jobportal
-            
-            echo "=== Application Deployment Complete ==="
+            EOF
+            systemctl daemon-reload && systemctl enable app && systemctl start app
 
-        TagSpecifications:
-          - ResourceType: instance
-            Tags:
-              - Key: Name
-                Value: !Sub '${ProjectName}-${Environment}-web-server-v2'
-
-  AutoScalingGroup:
+  ASG:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
-      AutoScalingGroupName: !Sub '${ProjectName}-${Environment}-asg-v2'
       LaunchTemplate:
-        LaunchTemplateId: !Ref LaunchTemplate
-        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+        LaunchTemplateId: !Ref LT
+        Version: !GetAtt LT.LatestVersionNumber
       MinSize: 1
       MaxSize: 3
       DesiredCapacity: 1
       VPCZoneIdentifier: !Ref PublicSubnetIds
-      TargetGroupARNs:
-        - !Ref ALBTargetGroup
+      TargetGroupARNs: [!Ref TG]
       HealthCheckType: ELB
       HealthCheckGracePeriod: 300
-      Tags:
-        - Key: Name
-          Value: !Sub '${ProjectName}-${Environment}-asg-instance-v2'
-          PropagateAtLaunch: true
-
-  ScaleUpPolicy:
-    Type: AWS::AutoScaling::ScalingPolicy
-    Properties:
-      AutoScalingGroupName: !Ref AutoScalingGroup
-      PolicyType: TargetTrackingScaling
-      TargetTrackingConfiguration:
-        PredefinedMetricSpecification:
-          PredefinedMetricType: ASGAverageCPUUtilization
-        TargetValue: 70.0
 
 Outputs:
-  LoadBalancerDNS:
-    Description: Application URL
-    Value: !Sub 'http://${ApplicationLoadBalancer.DNSName}'
-
-  LoadBalancerArn:
-    Value: !Ref ApplicationLoadBalancer
+  URL:
+    Value: !Sub 'http://${ALB.DNSName}'
