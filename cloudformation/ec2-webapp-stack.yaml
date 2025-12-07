@@ -20,7 +20,7 @@ Parameters:
     Type: AWS::EC2::SecurityGroup::Id
   InstanceType:
     Type: String
-    Default: t2.micro
+    Default: t3.micro
   S3BucketName:
     Type: String
   DBEndpoint:
